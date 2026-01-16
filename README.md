@@ -94,6 +94,31 @@ A production-ready backend for an AI-powered Solana memecoin management system. 
 | GET | `/api/activity/:type` | Get logs by type |
 | POST | `/api/activity/thought` | Log AI thought/decision |
 
+### Grok AI (xAI)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/ai/analyze-sentiment` | Analyze community sentiment |
+| POST | `/api/ai/get-decision` | Get AI decision on action |
+| POST | `/api/ai/generate-response` | Generate X response |
+| POST | `/api/ai/community-insight` | Full community analysis |
+
+### X (Twitter) API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/x/status` | Check X API configuration |
+| GET | `/api/x/mentions` | Search community mentions |
+| POST | `/api/x/analyze-and-respond` | Analyze and optionally auto-reply |
+| POST | `/api/x/post` | Post a tweet |
+| POST | `/api/x/reply` | Reply to a tweet |
+
+### Autonomous Agent
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/agent/run-cycle` | Run full AI agent cycle |
+
 ### Treasury
 
 | Method | Endpoint | Description |
@@ -110,6 +135,16 @@ SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
 # Helius API for holder snapshots (required for snapshots)
 HELIUS_API_KEY=your_helius_api_key
 
+# xAI/Grok API (required for AI features)
+XAI_API_KEY=your_xai_api_key
+
+# X (Twitter) API (required for community monitoring)
+X_BEARER_TOKEN=your_twitter_bearer_token
+X_API_KEY=your_twitter_api_key
+X_API_SECRET=your_twitter_api_secret
+X_ACCESS_TOKEN=your_twitter_access_token
+X_ACCESS_SECRET=your_twitter_access_secret
+
 # Session secret for Express
 SESSION_SECRET=your_session_secret
 ```
@@ -122,6 +157,8 @@ SESSION_SECRET=your_session_secret
 | Pump.fun | Market data, token info | https://frontend-api-v3.pump.fun |
 | Helius | Holder snapshots, RPC | https://helius.xyz |
 | Solana Web3.js | Wallet, transfers, burns | https://solana-labs.github.io/solana-web3.js |
+| xAI (Grok) | AI decision making, sentiment analysis | https://x.ai/api |
+| X (Twitter) API v2 | Community monitoring, engagement | https://developer.twitter.com/en/docs/twitter-api |
 
 ## Request Examples
 
@@ -211,6 +248,55 @@ curl -X POST http://localhost:5000/api/activity/thought \
   }'
 ```
 
+### Analyze Community Sentiment (Grok AI)
+
+```bash
+curl -X POST http://localhost:5000/api/ai/analyze-sentiment \
+  -H "Content-Type: application/json" \
+  -d '{
+    "posts": [
+      "GROK to the moon! Best memecoin on Solana",
+      "Just bought more, community is amazing",
+      "When airdrop? Been holding for weeks"
+    ]
+  }'
+```
+
+### Get AI Decision
+
+```bash
+curl -X POST http://localhost:5000/api/ai/get-decision \
+  -H "Content-Type: application/json" \
+  -d '{
+    "marketData": {
+      "marketCap": 50000,
+      "volume24h": 10000,
+      "priceChange24h": -5,
+      "holderCount": 150,
+      "bondingCurveProgress": 45
+    },
+    "sentiment": {
+      "overall": "bullish",
+      "score": 0.7,
+      "keyTopics": ["airdrop", "moon"],
+      "urgency": "medium"
+    },
+    "treasuryBalance": 5.5
+  }'
+```
+
+### Search X Mentions
+
+```bash
+curl -s "http://localhost:5000/api/x/mentions?query=groked&maxResults=50"
+```
+
+### Run Full Agent Cycle
+
+```bash
+curl -X POST http://localhost:5000/api/agent/run-cycle
+```
+
 ## Project Structure
 
 ```
@@ -220,7 +306,9 @@ curl -X POST http://localhost:5000/api/activity/thought \
 │   ├── storage.ts        # Data storage interface
 │   └── services/
 │       ├── solana.ts     # Solana blockchain operations
-│       └── pumpportal.ts # Pump.fun & PumpPortal API
+│       ├── pumpportal.ts # Pump.fun & PumpPortal API
+│       ├── grok.ts       # xAI/Grok AI service
+│       └── twitter.ts    # X (Twitter) API service
 ├── shared/
 │   └── schema.ts         # TypeScript types & Zod schemas
 └── README.md

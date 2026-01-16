@@ -3,6 +3,8 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { solanaService } from "./services/solana";
 import { pumpPortalService } from "./services/pumpportal";
+import { grokService } from "./services/grok";
+import { twitterService } from "./services/twitter";
 import {
   deployTokenRequestSchema,
   airdropRequestSchema,
@@ -770,6 +772,312 @@ export async function registerRoutes(
   app.get("/api/tokens", asyncHandler(async (req, res) => {
     const tokens = await storage.getAllTokens();
     res.json(tokens);
+  }));
+
+  // ============================================
+  // GROK AI ENDPOINTS
+  // ============================================
+  app.post("/api/ai/analyze-sentiment", asyncHandler(async (req, res) => {
+    const { posts } = req.body;
+    
+    if (!posts || !Array.isArray(posts) || posts.length === 0) {
+      res.status(400).json({ error: "Posts array is required" });
+      return;
+    }
+
+    const sentiment = await grokService.analyzeCommunitysentiment(posts);
+
+    // Log AI activity
+    await storage.createActivityLog({
+      type: "thought",
+      action: "sentiment_analysis",
+      thought: `Analyzed ${posts.length} posts. Overall sentiment: ${sentiment.overall} (${sentiment.score})`,
+      description: `Community sentiment analysis: ${sentiment.overall}`,
+      metadata: { sentiment, postCount: posts.length },
+      status: "success",
+    });
+
+    res.json(sentiment);
+  }));
+
+  app.post("/api/ai/get-decision", asyncHandler(async (req, res) => {
+    const { marketData, sentiment, treasuryBalance } = req.body;
+    
+    if (!marketData) {
+      res.status(400).json({ error: "Market data is required" });
+      return;
+    }
+
+    const decision = await grokService.getDecision(
+      marketData,
+      sentiment || { overall: "neutral", score: 0, keyTopics: [], urgency: "low" },
+      treasuryBalance || 0
+    );
+
+    // Log AI decision
+    await storage.createActivityLog({
+      type: "thought",
+      action: "ai_decision",
+      thought: decision.thought,
+      description: `AI Decision: ${decision.action} - ${decision.reason}`,
+      metadata: { decision, marketData, sentiment },
+      status: "success",
+    });
+
+    res.json(decision);
+  }));
+
+  app.post("/api/ai/generate-response", asyncHandler(async (req, res) => {
+    const { context, tone = "friendly" } = req.body;
+    
+    if (!context) {
+      res.status(400).json({ error: "Context is required" });
+      return;
+    }
+
+    const response = await grokService.generateResponse(context, tone);
+    res.json({ response });
+  }));
+
+  app.post("/api/ai/community-insight", asyncHandler(async (req, res) => {
+    const { posts, marketData, treasuryBalance } = req.body;
+
+    if (!posts || !Array.isArray(posts)) {
+      res.status(400).json({ error: "Posts array is required" });
+      return;
+    }
+
+    const insight = await grokService.getCommunityInsight(
+      posts,
+      marketData || {
+        marketCap: 0,
+        volume24h: 0,
+        priceChange24h: 0,
+        holderCount: 0,
+        bondingCurveProgress: 0,
+      },
+      treasuryBalance || 0
+    );
+
+    // Log insight
+    await storage.createActivityLog({
+      type: "thought",
+      action: "community_insight",
+      thought: insight.suggestedAction.thought,
+      description: insight.summary,
+      metadata: { insight },
+      status: "success",
+    });
+
+    res.json(insight);
+  }));
+
+  // ============================================
+  // X (TWITTER) API ENDPOINTS
+  // ============================================
+  app.get("/api/x/status", asyncHandler(async (req, res) => {
+    res.json({
+      configured: twitterService.isConfigured(),
+      message: twitterService.isConfigured()
+        ? "X API is configured and ready"
+        : "X API credentials not configured. Set X_BEARER_TOKEN, X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET",
+    });
+  }));
+
+  app.get("/api/x/mentions", asyncHandler(async (req, res) => {
+    const query = (req.query.query as string) || "groked OR groked.dev";
+    const maxResults = parseInt(req.query.maxResults as string) || 100;
+    
+    const result = await twitterService.searchMentions(query, maxResults);
+    
+    // Log activity
+    await storage.createActivityLog({
+      type: "thought",
+      action: "x_mentions_fetch",
+      description: `Fetched ${result.resultCount} mentions from X`,
+      metadata: { query, resultCount: result.resultCount },
+      status: "success",
+    });
+
+    res.json(result);
+  }));
+
+  app.post("/api/x/analyze-and-respond", asyncHandler(async (req, res) => {
+    const { query = "groked OR groked.dev", autoReply = false } = req.body;
+
+    // Fetch recent mentions
+    const mentions = await twitterService.searchMentions(query, 50);
+
+    if (mentions.tweets.length === 0) {
+      res.json({ message: "No recent mentions found", analyzed: [] });
+      return;
+    }
+
+    // Analyze with Grok AI
+    const posts = mentions.tweets.map(t => t.text);
+    const insight = await grokService.getCommunityInsight(
+      posts,
+      { marketCap: 0, volume24h: 0, priceChange24h: 0, holderCount: 0, bondingCurveProgress: 0 },
+      0
+    );
+
+    // Analyze individual posts for response
+    const analyzed = [];
+    for (const tweet of mentions.tweets.slice(0, 10)) { // Limit to 10
+      const analysis = await grokService.analyzePost(tweet.text);
+      analyzed.push({
+        tweet,
+        analysis,
+      });
+
+      // Auto-reply if enabled and actionable
+      if (autoReply && analysis.isActionable && analysis.suggestedReply) {
+        const replyResult = await twitterService.replyToTweet(tweet.id, analysis.suggestedReply);
+        if (replyResult.success) {
+          await storage.createActivityLog({
+            type: "thought",
+            action: "x_auto_reply",
+            description: `Replied to tweet ${tweet.id}`,
+            metadata: { tweetId: tweet.id, reply: analysis.suggestedReply },
+            status: "success",
+          });
+        }
+      }
+    }
+
+    // Log activity
+    await storage.createActivityLog({
+      type: "thought",
+      action: "x_analysis",
+      thought: insight.suggestedAction.thought,
+      description: `Analyzed ${mentions.tweets.length} tweets. Sentiment: ${insight.sentiment.overall}`,
+      metadata: { insight, analyzedCount: analyzed.length },
+      status: "success",
+    });
+
+    res.json({
+      insight,
+      analyzed,
+      totalMentions: mentions.resultCount,
+    });
+  }));
+
+  app.post("/api/x/post", asyncHandler(async (req, res) => {
+    const { text } = req.body;
+
+    if (!text) {
+      res.status(400).json({ error: "Tweet text is required" });
+      return;
+    }
+
+    const result = await twitterService.postTweet(text);
+
+    if (result.success) {
+      await storage.createActivityLog({
+        type: "thought",
+        action: "x_post",
+        description: `Posted tweet: ${text.substring(0, 50)}...`,
+        metadata: { tweetId: result.tweetId, text },
+        status: "success",
+      });
+    }
+
+    res.json(result);
+  }));
+
+  app.post("/api/x/reply", asyncHandler(async (req, res) => {
+    const { tweetId, text } = req.body;
+
+    if (!tweetId || !text) {
+      res.status(400).json({ error: "Tweet ID and text are required" });
+      return;
+    }
+
+    const result = await twitterService.replyToTweet(tweetId, text);
+
+    if (result.success) {
+      await storage.createActivityLog({
+        type: "thought",
+        action: "x_reply",
+        description: `Replied to tweet ${tweetId}`,
+        metadata: { tweetId, replyTweetId: result.tweetId, text },
+        status: "success",
+      });
+    }
+
+    res.json(result);
+  }));
+
+  // ============================================
+  // AUTONOMOUS AGENT LOOP
+  // ============================================
+  app.post("/api/agent/run-cycle", asyncHandler(async (req, res) => {
+    const treasuryWallet = await storage.getTreasuryWallet();
+    const activeToken = await storage.getActiveToken();
+
+    if (!treasuryWallet) {
+      res.status(400).json({ error: "Treasury wallet not configured" });
+      return;
+    }
+
+    // 1. Fetch X mentions
+    const mentions = await twitterService.searchMentions("groked OR groked.dev", 50);
+    const posts = mentions.tweets.map(t => t.text);
+
+    // 2. Get market data
+    let marketData = {
+      marketCap: 0,
+      volume24h: 0,
+      priceChange24h: 0,
+      holderCount: 0,
+      bondingCurveProgress: 0,
+    };
+
+    if (activeToken) {
+      const pumpData = await pumpPortalService.getMarketData(activeToken.mint);
+      if (pumpData) {
+        marketData = {
+          marketCap: parseFloat(pumpData.marketCap),
+          volume24h: parseFloat(pumpData.volume24h),
+          priceChange24h: 0, // Would need historical data
+          holderCount: pumpData.holderCount,
+          bondingCurveProgress: parseFloat(pumpData.bondingCurveProgress),
+        };
+      }
+    }
+
+    // 3. Get treasury balance
+    const treasuryBalance = await solanaService.getSolBalance(treasuryWallet.publicKey);
+
+    // 4. Get AI insight
+    const insight = await grokService.getCommunityInsight(posts, marketData, treasuryBalance);
+
+    // 5. Log the cycle
+    await storage.createActivityLog({
+      type: "thought",
+      action: "agent_cycle",
+      thought: insight.suggestedAction.thought,
+      description: `Agent cycle complete. Recommendation: ${insight.suggestedAction.action}`,
+      metadata: {
+        mentionsCount: mentions.resultCount,
+        sentiment: insight.sentiment,
+        decision: insight.suggestedAction,
+        treasuryBalance,
+        marketData,
+      },
+      status: "success",
+    });
+
+    res.json({
+      cycle: {
+        timestamp: new Date().toISOString(),
+        mentionsAnalyzed: mentions.resultCount,
+        treasuryBalance,
+        marketData,
+      },
+      insight,
+      recommendation: insight.suggestedAction,
+    });
   }));
 
   return httpServer;
